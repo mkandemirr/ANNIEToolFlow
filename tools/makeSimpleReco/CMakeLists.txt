@@ -1,0 +1,2 @@
+addTool(makeSimpleReco)
+

@@ -1,0 +1,8 @@
+# positios are given wrt global cs in units of meter (from Yue).
+# first icluded lappd ID starts with 464 because the highest pmt id is 463
+#ID	X (m)	Y (m)	Z (m)
+464	0.902975	-0.8132	2.583975
+524	0.902975	0.2868	2.583975
+584	0.000000	-0.2632	2.958000
+644	-0.902975	-0.8132	2.583975
+704	-0.902975	0.2868	2.583975
