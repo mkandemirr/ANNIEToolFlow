@@ -211,12 +211,52 @@ foreach(_script ${EXAMPLEB1_SCRIPTS})
 endforeach()
 
 #----------------------------------------------------------------------------
-# Copy toolChains directory
+# Copy ToolChains directory/configs conditionally
 #
-file(COPY
-  ${PROJECT_SOURCE_DIR}/toolChains
-  DESTINATION ${PROJECT_BINARY_DIR}
-)
+set(TOOLCHAINS_OUTPUT_DIR ${PROJECT_BINARY_DIR}/toolChains)
+
+# Case 1:
+# No TOOLS and no TOOLCHAINS given:
+# copy all ToolChains
+if(TOOLS STREQUAL "" AND TOOLCHAINS STREQUAL "")
+
+    message(STATUS ">>> Copying all ToolChains")
+
+    file(COPY
+        ${PROJECT_SOURCE_DIR}/toolChains
+        DESTINATION ${PROJECT_BINARY_DIR}
+    )
+
+# Case 2:
+# TOOLCHAINS is given:
+# copy only selected ToolChains
+elseif(NOT TOOLCHAINS STREQUAL "")
+
+    file(MAKE_DIRECTORY ${TOOLCHAINS_OUTPUT_DIR})
+
+    foreach(chain_path IN LISTS TOOLCHAINS)
+
+        if(NOT IS_DIRECTORY "${PROJECT_SOURCE_DIR}/${chain_path}")
+            message(FATAL_ERROR "Requested ToolChain directory does not exist: ${chain_path}")
+        endif()
+
+        message(STATUS ">>> Copying selected ToolChain: ${chain_path}")
+
+        file(COPY
+            ${PROJECT_SOURCE_DIR}/${chain_path}
+            DESTINATION ${TOOLCHAINS_OUTPUT_DIR}
+        )
+
+    endforeach()
+
+# Case 3:
+# TOOLS is given but TOOLCHAINS is empty:
+# do not copy ToolChains
+else()
+
+    message(STATUS ">>> TOOLS selected. No ToolChains copied.")
+
+endif()
 
 
 
