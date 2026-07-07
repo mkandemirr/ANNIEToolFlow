@@ -2,7 +2,7 @@
 project(plotLAPPDHit)
 
 add_executable(plotLAPPDHit main.cpp)
-target_link_libraries(plotLAPPDHit PRIVATE BeamClusterTreeReader ${ROOT_LIBRARIES})
+target_link_libraries(plotLAPPDHit PRIVATE ANNIEDataStructure ${ROOT_LIBRARIES})
 
 
 set_target_properties(plotLAPPDHit PROPERTIES

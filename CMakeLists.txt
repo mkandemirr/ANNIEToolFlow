@@ -19,16 +19,16 @@ set(INIREADER_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/iniReader")
 
 file(GLOB_RECURSE SHARED_SOURCES "${SHARED_SRC_DIR}/*.cc")
 
-add_library(BeamClusterTreeReader SHARED
+add_library(ANNIEDataStructure SHARED
   ${SHARED_SOURCES}
 )
 
-target_include_directories(BeamClusterTreeReader
+target_include_directories(ANNIEDataStructure
   PUBLIC
     ${SHARED_INCLUDE_DIR}
 )
 
-target_link_libraries(BeamClusterTreeReader
+target_link_libraries(ANNIEDataStructure
   PUBLIC
     ${ROOT_LIBRARIES}
     ROOT::Spectrum
@@ -49,7 +49,7 @@ function(addTool toolName)
     )
 
     target_link_libraries(${toolName} PRIVATE
-        BeamClusterTreeReader
+        ANNIEDataStructure
         ${ROOT_LIBRARIES}
     )
 
@@ -57,7 +57,7 @@ function(addTool toolName)
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     
-    set_target_properties(BeamClusterTreeReader PROPERTIES
+    set_target_properties(ANNIEDataStructure PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
    )
 
