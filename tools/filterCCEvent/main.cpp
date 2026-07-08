@@ -85,6 +85,10 @@ void FilterCCEvent(const INIReader& iniReader)
    const bool cutTankMRDCoinc          = iniReader.GetBoolean("cuts", "tankMRDCoinc", false);
    const bool cutMuonTopology          = iniReader.GetBoolean("cuts", "muonTopology", false);
    const bool cutNoVeto                = iniReader.GetBoolean("cuts", "noVeto", false);
+   
+   const bool cutMRDSide               = iniReader.GetBoolean("cuts", "mrdSide", false);
+   const bool cutMRDThrough            = iniReader.GetBoolean("cuts", "mrdThrough", false);
+   const bool cutMRDStop               = iniReader.GetBoolean("cuts", "mrdStop", false);
 
    const double promptWindowMax        = iniReader.GetReal("cutValues", "promptWindowMax", 2000.0);
    const double chargeBalanceMax       = iniReader.GetReal("cutValues", "chargeBalanceMax", 0.2);
@@ -141,6 +145,10 @@ void FilterCCEvent(const INIReader& iniReader)
    int passTankMRDCoinc          = -1;
    int passMuonTopology          = -1;
    int passNoVeto                = -1;
+   
+   int passMRDSide               = -1;
+   int passMRDThrough            = -1;
+   int passMRDStop               = -1;
 
    if (writeAnnotated) {
       outputTree->Branch("passTrueCC",                &passTrueCC,                "passTrueCC/I");
@@ -156,6 +164,9 @@ void FilterCCEvent(const INIReader& iniReader)
       outputTree->Branch("passTankMRDCoinc",          &passTankMRDCoinc,          "passTankMRDCoinc/I");
       outputTree->Branch("passMuonTopology",          &passMuonTopology,          "passMuonTopology/I");
       outputTree->Branch("passNoVeto",                &passNoVeto,                "passNoVeto/I");
+      outputTree->Branch("passMRDSide",               &passMRDSide,               "passMRDSide/I");
+      outputTree->Branch("passMRDThrough",            &passMRDThrough,            "passMRDThrough/I");
+      outputTree->Branch("passMRDStop",               &passMRDStop,               "passMRDStop/I");
    }
    
    Long64_t nEntries = tree->GetEntries();
@@ -171,8 +182,8 @@ void FilterCCEvent(const INIReader& iniReader)
       tree->SetBranchAddress("beam_ok", &beam_ok);
       tree->SetBranchAddress("BRFFirstPeakFit", &BRFFirstPeakFit);
    }
-
-
+   
+   
    // Initialize readers
    MCLAPPDHitReader mcLAPPDHitReader;
    LAPPDMetaReader metaReader;    
@@ -226,6 +237,7 @@ void FilterCCEvent(const INIReader& iniReader)
       // ------------------------------------------------------------
       // 1) Require LAPPD both for MC and data
       // ------------------------------------------------------------
+      //Cut 1
       if (cutRequireLAPPD) {
 
          requireLAPPD = false;
@@ -249,12 +261,12 @@ void FilterCCEvent(const INIReader& iniReader)
       // ------------------------------------------------------------
       if (!useMC) {
 
-         // Beam OK
+         //Cut 2
          if (cutBeamOK) {
             beamOK = (beam_ok == 1);
          }
 
-         // BRF window
+         //Cut 3
          if (cutBRFWindow) {
             double brf_us = BRFFirstPeakFit / 1000.0;
             brfWindow = (brf_us >= brfMin && brf_us <= brfMax);
@@ -264,6 +276,7 @@ void FilterCCEvent(const INIReader& iniReader)
          // PPS missing tick.
          // if ANY LAPPD has an unexpected PPS tick difference,
          // the ENTIRE event is rejected. This is a hard cut.fix it later!
+         //Cut 4
          if (cutMissingPPSTick) {
 
             // 1 tick = 3.125 ns
@@ -303,7 +316,7 @@ void FilterCCEvent(const INIReader& iniReader)
       EMRDRecos eMRDRecos;
       mrdRecoReader.ReadEntry(i, eMRDRecos);
             
-      // Cut 0: Paired
+      // Cut 5: Paired
       bool isPairedEvent = false;
       if (eventReader.HasLAPPD() == 1 && 
           eventReader.HasMRD()   == 1   && 
@@ -314,7 +327,7 @@ void FilterCCEvent(const INIReader& iniReader)
       }
          
       
-      // Cut 1: Any PMT cluster 
+      // Cut 6: Any PMT cluster 
       // Find the cluster with the maximum charge (PE) in the initial time window
       bool hasClusterInPromptWindow = false;
       double maxPENumber = -1.0;
@@ -342,7 +355,7 @@ void FilterCCEvent(const INIReader& iniReader)
            
       }
      
-      // Cut 2: High-quality PMT cluster
+      // Cut 7: High-quality PMT cluster
       // Check if the previously selected cluster is a high-quality PMT cluster
       bool highQualityCluster = false;   
       if (hasClusterInPromptWindow && clusterPtrWithMaxPE )
@@ -353,7 +366,7 @@ void FilterCCEvent(const INIReader& iniReader)
       }
          
 
-      // Cut 3: MRD track reconstructed
+      // Cut 8: MRD track reconstructed
       bool mrdTrackReconstructed = false;
 
       for (const MRDCluster& cluster : eMRDClusters.Get()) {
@@ -412,8 +425,7 @@ void FilterCCEvent(const INIReader& iniReader)
       
       
       
-      // Cut 4: MRDReco check
-
+      // Cut 9: MRDReco check
       bool mrdRecoTrack = false;
 
       if (!eMRDRecos.Get().empty())
@@ -421,15 +433,54 @@ void FilterCCEvent(const INIReader& iniReader)
           mrdRecoTrack = true;
       }
       
+      // Cut 10: 
+      // Pass if at least one reconstructed MRD track is a side-exiting track
+      bool mrdSide = false;
+
+      if (cutMRDSide) {
+         for (const MRDReco& reco : eMRDRecos.Get()) {
+            if (reco.IsSide()) {
+               mrdSide = true;
+               break;
+            }
+         }
+      }
+
+      // Cut 11:
+      //Pass if at least one reconstructed MRD track is a through-going track
+      bool mrdThrough = false;
+
+      if (cutMRDThrough) {
+         for (const MRDReco& reco : eMRDRecos.Get()) {
+            if (reco.IsThrough()) {
+               mrdThrough = true;
+               break;
+            }
+         }
+      }
+
+      // Cut 12:
+      // Pass if at least one reconstructed MRD track is a stopping track.
+      bool mrdStop = false;
+
+      if (cutMRDStop) {
+         for (const MRDReco& reco : eMRDRecos.Get()) {
+            if (reco.IsStop()) {
+               mrdStop = true;
+               break;
+            }
+         }
+      }
       
       
-      // Cut 5: In-time MRD coincidence
+      
+      // Cut 13: In-time MRD coincidence
       bool tankMRDCoinc = false;
       if (eventReader.GetTankMRDCoinc() == 1)
          tankMRDCoinc = true;
       
       
-      //Cut 6: Muon topology cut
+      //Cut 14: Muon topology cut
       bool muonTopology = false;
             
       std::unordered_map<int, bool> passed;
@@ -468,19 +519,21 @@ void FilterCCEvent(const INIReader& iniReader)
          muonTopology = true;
 
 
-      //Cut 6: No hit in FMV
+      //Cut 15: No hit in FMV
       bool noVeto = false;
       if (eventReader.NoVeto() == 1)
          noVeto = true;
  
  
-      // Cut 7: True CC, MC only
+      // Cut 16: True CC, MC only
       bool trueCC = false;
 
       if (cutTrueCC) {
          mcEventReader.ReadEntry(i);
          trueCC = (mcEventReader.GetTrueCC() == 1);
       }
+      
+
       
       //------------------------------------------------------------------------
  
@@ -549,6 +602,21 @@ void FilterCCEvent(const INIReader& iniReader)
       if (cutTrueCC) {
          passedAllCuts = passedAllCuts && trueCC;
          passTrueCC = trueCC;
+      }
+      
+      if (cutMRDSide) {
+         passedAllCuts = passedAllCuts && mrdSide;
+         passMRDSide = mrdSide;
+      }
+
+      if (cutMRDThrough) {
+          passedAllCuts = passedAllCuts && mrdThrough;
+          passMRDThrough = mrdThrough;
+      }
+
+      if (cutMRDStop) {
+          passedAllCuts = passedAllCuts && mrdStop;
+          passMRDStop = mrdStop;
       }
 
 

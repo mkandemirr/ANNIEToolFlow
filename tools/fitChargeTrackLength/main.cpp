@@ -99,7 +99,7 @@ void fitChargeTrackLength(const INIReader& iniReader)
       if (trackLength <= 0)
          continue;
 
-      double totalPE = ANNIEUtility::GetTotalPE(tankClusterReader, i,0,2000);
+      double totalPE = ANNIEUtility::GetBestClusterPE(tankClusterReader, i,0,100);
 
       if (totalPE <= 0)
          continue;
