@@ -32,7 +32,7 @@ public:
     double GetTrackAngle() const { return mTrackAngle; }
     double GetTrackAngleError() const { return mTrackAngleError; }
     double GetPenetrationDepth() const { return mPenetrationDepth; }
-    double GetTrackLength() const { return mTrackLength; }
+    double GetTrackLength() const { return mTrackLength; } //return cm
     double GetEntryPointRadius() const { return mEntryPointRadius; }
     double GetEnergyLoss() const { return mEnergyLoss; }
     double GetEnergyLossError() const { return mEnergyLossError; }

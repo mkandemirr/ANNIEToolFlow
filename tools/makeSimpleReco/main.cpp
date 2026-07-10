@@ -1,11 +1,14 @@
 #include "TFile.h"
 #include "TTree.h"
 #include "TBranch.h"
+#include "TGraph.h"
+#include "TF1.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 #include "LAPPDPulseReader.h"
 #include "LAPPDHitReader.h"
@@ -16,6 +19,7 @@
 #include "TankClusterReader.h"
 #include "MRDClusterReader.h"
 #include "MRDRecoReader.h"
+#include "MCANNIEEventReader.h"
 #include "ANNIEUtility.h"
 #include "INIReader.h"
 
@@ -24,195 +28,253 @@
 // -----------------------------------------------------------------------------------
 
 struct SimpleRecoResult {
-    bool success = false;
-    bool fv = false;   // Fiducial volume flag. eger fv= true ise, success = true her zaman
+   bool success = false;
+   bool fv = false;   // Fiducial volume flag. eger fv= true ise, success = true her zaman
 
-    double x = -9999;
-    double y = -9999;
-    double z = -9999;
+   double x = -9999;
+   double y = -9999;
+   double z = -9999;
 
-    double dirx = -9999;
-    double diry = -9999;
-    double dirz = -9999;
+   double dirx = -9999;
+   double diry = -9999;
+   double dirz = -9999;
 
-    double exitx = -9999;
-    double exity = -9999;
-    double exitz = -9999;
+   double exitx = -9999;
+   double exity = -9999;
+   double exitz = -9999;
 
-    double E = -9999;
+   double E = -9999;
 };
 
 // -----------------------------------------------------------------------------------
 
-SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE);
+struct EnergyCalibration {
+   bool valid = false;
+
+   double p0 = 0.0;   // p0 [MeV]
+   double p1  = 0.0;   // p1 [MeV / PE]
+
+   Long64_t nUsed = 0;
+};
+
+// -----------------------------------------------------------------------------------
+
+SimpleRecoResult DoSimpleRecoFromMRD(
+   const MRDReco& reco,
+   double totalPE,
+   const EnergyCalibration& calib
+);
+
+// ------------------------------------------------------------
+
+bool ComputeOuterDistanceFromMRD(
+   const MRDReco& reco,
+   double& dist_pmtvol_tank
+);
+
+// ------------------------------------------------------------
+
+EnergyCalibration FitTankEnergyCalibration(
+   TTree* inputTree,
+   MRDRecoReader& mrdRecoReader,
+   TankClusterReader& tankClusterReader,
+   MCANNIEEventReader& mcReader
+);
+
+// ------------------------------------------------------------
+
 void makeSimpleReco(INIReader& iniReader);
 
 // -----------------------------------------------------------------------------------
 
 int main(int argc, char* argv[])
 {
-    INIReader iniReader(argv[1]);
-    makeSimpleReco(iniReader);
+   INIReader iniReader(argv[1]);
+   makeSimpleReco(iniReader);
 
-    return 0;
+   return 0;
 }
 
 // -----------------------------------------------------------------------------------
 
 void makeSimpleReco(INIReader& iniReader)
 {
-   std::string inputFile =
-    iniReader.Get("Input", "InputFile", "");
+   std::string inputFile = iniReader.Get("Input", "InputFile", "");
 
-   std::string outputFile =
-    iniReader.Get("Output", "OutputFile",
-                  "SimpleReco.root");
-   
-   TFile* inputRootFile = TFile::Open(
-    inputFile.c_str(), "READ");
+   std::string outputFile = iniReader.Get("Output", "OutputFile", "SimpleReco.root");
 
-    if (!inputRootFile || inputRootFile->IsZombie()) {
-        std::cerr << "Error opening file: " << inputFile << std::endl;
-        return;
-    }
+   TFile* inputRootFile = TFile::Open(inputFile.c_str(), "READ");
 
-    TTree* inputTree = (TTree*)inputRootFile->Get("Event");
+   if (!inputRootFile || inputRootFile->IsZombie()) {
+      std::cerr << "Error opening file: " << inputFile << std::endl;
+      return;
+   }
 
-    if (!inputTree) {
-        std::cerr << "Error: Tree 'Event' not found in file!" << std::endl;
-        inputRootFile->Close();
-        return;
-    }
+   TTree* inputTree = (TTree*)inputRootFile->Get("Event");
 
-    
-    TFile* outputRootFile = TFile::Open(outputFile.c_str(), "RECREATE");
+   if (!inputTree) {
+      std::cerr << "Error: Tree 'Event' not found in file!" << std::endl;
+      inputRootFile->Close();
+      return;
+   }
 
-    if (!outputRootFile || outputRootFile->IsZombie()) {
-        std::cerr << "Error creating output file: " << outputFile << std::endl;
-        inputRootFile->Close();
-        return;
-    }
 
-    TTree* outputTree = inputTree->CloneTree(0);
+   TFile* outputRootFile = TFile::Open(outputFile.c_str(), "RECREATE");
 
-    Long64_t nEntries = inputTree->GetEntries();
-    std::cout << "Number of events in this tree: " << nEntries << std::endl;
-    
+   if (!outputRootFile || outputRootFile->IsZombie()) {
+      std::cerr << "Error creating output file: " << outputFile << std::endl;
+      inputRootFile->Close();
+      return;
+   }
 
-    // -------------------------------------------------------------------------------
-    // Output variables
-    // -------------------------------------------------------------------------------
-    // will be stored wrt global coordinate and in units of meter
-    double SimpleRecoX = -9999;
-    double SimpleRecoY = -9999;
-    double SimpleRecoZ = -9999;
+   TTree* outputTree = inputTree->CloneTree(0);
 
-    double SimpleRecoDirX = -9999;
-    double SimpleRecoDirY = -9999;
-    double SimpleRecoDirZ = -9999;
+   Long64_t nEntries = inputTree->GetEntries();
+   std::cout << "Number of events in this tree: " << nEntries << std::endl;
 
-    double SimpleRecoEnergy = -9999;
 
-    int SimpleRecoFlag = -9999;  // 1 if simple reco succeeds, 0 otherwise
-    int SimpleRecoFV   = -9999;  // 1 if reco vertex is inside fiducial volume
+   // -------------------------------------------------------------------------------
+   // Output variables
+   // -------------------------------------------------------------------------------
+   // will be stored wrt global coordinate and in units of meter
+   double SimpleRecoX = -9999;
+   double SimpleRecoY = -9999;
+   double SimpleRecoZ = -9999;
 
-    outputTree->Branch("SimpleRecoX",      &SimpleRecoX,      "SimpleRecoX/D");
-    outputTree->Branch("SimpleRecoY",      &SimpleRecoY,      "SimpleRecoY/D");
-    outputTree->Branch("SimpleRecoZ",      &SimpleRecoZ,      "SimpleRecoZ/D");
+   double SimpleRecoDirX = -9999;
+   double SimpleRecoDirY = -9999;
+   double SimpleRecoDirZ = -9999;
 
-    outputTree->Branch("SimpleRecoDirX",   &SimpleRecoDirX,   "SimpleRecoDirX/D");
-    outputTree->Branch("SimpleRecoDirY",   &SimpleRecoDirY,   "SimpleRecoDirY/D");
-    outputTree->Branch("SimpleRecoDirZ",   &SimpleRecoDirZ,   "SimpleRecoDirZ/D");
+   double SimpleRecoEnergy = -9999;
 
-    outputTree->Branch("SimpleRecoEnergy", &SimpleRecoEnergy, "SimpleRecoEnergy/D");
-    outputTree->Branch("SimpleRecoFlag",   &SimpleRecoFlag,   "SimpleRecoFlag/I");
-    outputTree->Branch("SimpleRecoFV",     &SimpleRecoFV,     "SimpleRecoFV/I");
+   int SimpleRecoFlag = -9999;  // 1 if simple reco succeeds, 0 otherwise
+   int SimpleRecoFV   = -9999;  // 1 if reco vertex is inside fiducial volume
 
-    MRDRecoReader mrdRecoReader;
-    mrdRecoReader.Init(inputTree);
+   outputTree->Branch("SimpleRecoX",      &SimpleRecoX,      "SimpleRecoX/D");
+   outputTree->Branch("SimpleRecoY",      &SimpleRecoY,      "SimpleRecoY/D");
+   outputTree->Branch("SimpleRecoZ",      &SimpleRecoZ,      "SimpleRecoZ/D");
 
-    TankClusterReader tankClusterReader;
-    tankClusterReader.Init(inputTree);
+   outputTree->Branch("SimpleRecoDirX",   &SimpleRecoDirX,   "SimpleRecoDirX/D");
+   outputTree->Branch("SimpleRecoDirY",   &SimpleRecoDirY,   "SimpleRecoDirY/D");
+   outputTree->Branch("SimpleRecoDirZ",   &SimpleRecoDirZ,   "SimpleRecoDirZ/D");
 
-    // -------------------------------------------------------------------------------
-    // Event loop
-    // -------------------------------------------------------------------------------
+   outputTree->Branch("SimpleRecoEnergy", &SimpleRecoEnergy, "SimpleRecoEnergy/D");
+   outputTree->Branch("SimpleRecoFlag",   &SimpleRecoFlag,   "SimpleRecoFlag/I");
+   outputTree->Branch("SimpleRecoFV",     &SimpleRecoFV,     "SimpleRecoFV/I");
 
-   
+   MRDRecoReader mrdRecoReader;
+   mrdRecoReader.Init(inputTree);
+
+   TankClusterReader tankClusterReader;
+   tankClusterReader.Init(inputTree);
+
+   MCANNIEEventReader mcReader;
+   mcReader.Init(inputTree);
+
+   // -------------------------------------------------------------------------------
+   // Fit tank energy calibration using MC truth
+   // ETank = Etrue - E_outer - E_mrd
+   // ETank = p0 + p1 * totalPE
+   // -------------------------------------------------------------------------------
+
+   EnergyCalibration calib = FitTankEnergyCalibration(
+                                inputTree,
+                                mrdRecoReader,
+                                tankClusterReader,
+                                mcReader
+                                );
+
+   if (!calib.valid) {
+      std::cerr << "Error: tank energy calibration failed." << std::endl;
+      outputRootFile->Close();
+      inputRootFile->Close();
+      delete outputRootFile;
+      delete inputRootFile;
+      return;
+   }
+
+
+
+   // -------------------------------------------------------------------------------
+   // Event loop
+   // -------------------------------------------------------------------------------
+
    Long64_t nRecoSuccess = 0;
    Long64_t nMultipleRecoEvents = 0;
    Long64_t nFVEvents = 0;
-    for (Long64_t i = 0; i < nEntries; ++i) {
+   for (Long64_t i = 0; i < nEntries; ++i) {
 
-        inputTree->GetEntry(i);
+      inputTree->GetEntry(i);
 
-        // Reset output values for each event
-        SimpleRecoX = -9999;
-        SimpleRecoY = -9999;
-        SimpleRecoZ = -9999;
+      // Reset output values for each event
+      SimpleRecoX = -9999;
+      SimpleRecoY = -9999;
+      SimpleRecoZ = -9999;
 
-        SimpleRecoDirX = -9999;
-        SimpleRecoDirY = -9999;
-        SimpleRecoDirZ = -9999;
+      SimpleRecoDirX = -9999;
+      SimpleRecoDirY = -9999;
+      SimpleRecoDirZ = -9999;
 
-        SimpleRecoEnergy = -9999;
-        SimpleRecoFlag = 0;
-        SimpleRecoFV = 0;
+      SimpleRecoEnergy = -9999;
+      SimpleRecoFlag = 0;
+      SimpleRecoFV = 0;
 
-        // Read MRD reconstructed tracks
-        EMRDRecos eMRDRecos;
-        mrdRecoReader.ReadEntry(i, eMRDRecos);
+      // Read MRD reconstructed tracks
+      EMRDRecos eMRDRecos;
+      mrdRecoReader.ReadEntry(i, eMRDRecos);
 
-        // Get total PMT charge in prompt window: 0 - 2000 ns
-        double totalPE =
-            ANNIEUtility::GetTotalPE(
-                tankClusterReader,
-                i,
-                0.0,
-                2000.0);
+      // Get total PMT charge in prompt window: 0 - 2000 ns
+      double totalPE =
+      ANNIEUtility::GetBestClusterPE(tankClusterReader,
+                                    i,
+                                    0.0,
+                                    2000.0);
 
-         const auto& recos = eMRDRecos.Get();
+      const auto& recos = eMRDRecos.Get();
 
-         // Require exactly one MRDReco track
-         if (recos.size() == 1)
+      // Require exactly one MRDReco track
+      if (recos.size() == 1)
+      {
+         const auto& reco = recos.at(0);
+
+         SimpleRecoResult simple =
+         DoSimpleRecoFromMRD(reco,
+                           totalPE,
+                           calib
+                           );
+
+         SimpleRecoX = simple.x;
+         SimpleRecoY = simple.y;
+         SimpleRecoZ = simple.z;
+
+         SimpleRecoDirX = simple.dirx;
+         SimpleRecoDirY = simple.diry;
+         SimpleRecoDirZ = simple.dirz;
+
+         SimpleRecoEnergy = simple.E;
+
+         SimpleRecoFlag = simple.success ? 1 : 0;
+         SimpleRecoFV   = simple.fv ? 1 : 0;
+
+         if(simple.success)
          {
-             const auto& reco = recos.at(0);
-
-             SimpleRecoResult simple = DoSimpleRecoFromMRD(reco, totalPE);
-
-             SimpleRecoX = simple.x;
-             SimpleRecoY = simple.y;
-             SimpleRecoZ = simple.z;
-
-             SimpleRecoDirX = simple.dirx;
-             SimpleRecoDirY = simple.diry;
-             SimpleRecoDirZ = simple.dirz;
-
-             SimpleRecoEnergy = simple.E;
-
-             SimpleRecoFlag = simple.success ? 1 : 0;
-             SimpleRecoFV   = simple.fv ? 1 : 0;
-
-             if(simple.success)
-             {
-                 ++nRecoSuccess;
-             }
-             
-             if(simple.fv)
-            {
-                ++nFVEvents;
-            }
-         
+            ++nRecoSuccess;
          }
-         
-         if(recos.size() > 1)
-             ++nMultipleRecoEvents;
-             
-        outputTree->Fill();
-    }
+
+         if(simple.fv)
+         {
+            ++nFVEvents;
+         }
+
+      }
+
+      if(recos.size() > 1)
+         ++nMultipleRecoEvents;
+
+      outputTree->Fill();
+   }
     
 
-   
    std::cout << "----------------------------------" << std::endl;
    std::cout << "makeSimpleReco" << std::endl;
    std::cout << "InputFile : " << inputFile << std::endl;
@@ -238,7 +300,9 @@ void makeSimpleReco(INIReader& iniReader)
 
 // -----------------------------------------------------------------------------------
 
-SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
+SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco,
+                                     double totalPE,
+                                     const EnergyCalibration& calib)
 {
     SimpleRecoResult out;
 
@@ -257,9 +321,10 @@ SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
     // Energy reconstruction constants
     // -------------------------------------------------------------------------------
 
-    const double energy_offset = 87.3;          // Empirical offset [MeV]
-    const double tank_water_eloss_per_m = 200;   // Approximate energy loss per meter [MeV/m]
-    const double pe_to_energy = 0.08534;        // PE to energy coefficient [MeV / PE]
+    const double tank_water_eloss_per_m = 199.2;   // Approximate energy loss per meter [MeV/m]
+
+    const double p0 = calib.p0;  // fitted p0 [MeV]
+    const double p1  = calib.p1;   // fitted p1 [MeV / PE]
 
     // -------------------------------------------------------------------------------
     // Basic event quality checks
@@ -274,12 +339,10 @@ SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
       return out;
     }
         
-
     // -------------------------------------------------------------------------------
     // MRD track start and stop positions in global coordinates [m]
     // -------------------------------------------------------------------------------
-
-      //meter 
+   //meter 
     const double startx = reco.GetStartX();
     const double starty = reco.GetStartY();
     const double startz = reco.GetStartZ();
@@ -390,7 +453,7 @@ SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
         return out; //burda da out.success = false doner default
 
     // -------------------------------------------------------------------------------
-    // Tank exit position
+    // Tank PMT volume exit position
     //
     // This is where the extrapolated MRD track intersects the tank cylinder.
     // -------------------------------------------------------------------------------
@@ -406,9 +469,10 @@ SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
     // totalPE = p0 + p1*trackLength; //assuming lineer relation
     
     //this fit parameters are obtained using the fitChargeTrackLength tool 
-    double p0 = -383.898; //pe
-    double p1 = 1642.77;  // unit : PE/m 
-    const double trackLengthTank = (totalPE -p0)/p1 ; 
+    //double p0 = -383.898; //pe
+    //double p1 = 1642.77;  // unit : PE/m 
+    //const double trackLengthTank = (totalPE -p0)/p1 ; 
+    const double trackLengthTank = (totalPE*p1)/tank_water_eloss_per_m;
 
     // -------------------------------------------------------------------------------
     // Vertex reconstruction
@@ -450,92 +514,295 @@ SimpleRecoResult DoSimpleRecoFromMRD(const MRDReco& reco, double totalPE)
         out.fv = true;
     }
 
+   // -------------------------------------------------------------------------------
+   // Distance between PMT-volume exit point and outer tank volume
+   // -------------------------------------------------------------------------------
+
+   double dist_pmtvol_tank = -9999;
+
+   bool okOuter =
+       ComputeOuterDistanceFromMRD(
+           reco,
+           dist_pmtvol_tank
+       );
+
+   if (!okOuter) {
+       out.success = false;
+       return out;
+   }
+
+   // -------------------------------------------------------------------------------
+   // Simple energy reconstruction
+   //
+   // E_mu_reco = alpha * Q + beta * d_outer + E_loss_MRD + c
+   // -------------------------------------------------------------------------------
+
+   const double E_tank        = p1 * totalPE + p0;
+   const double E_outer       = tank_water_eloss_per_m * dist_pmtvol_tank;
+   const double E_mrd         = reco.GetEnergyLoss();
+
+   out.E = E_tank + E_outer + E_mrd;
+       
+   out.success = true;
+    return out;
+}
+
+
+// -------------------------------------------------------------------------------
+ 
+bool ComputeOuterDistanceFromMRD(
+    const MRDReco& reco,
+    double& dist_pmtvol_tank
+)
+{
+    dist_pmtvol_tank = -9999;
+
+    const double tank_z_center = 1.681;
+    const double innerCylRadius = 1.0;
+    const double outerCylRadius = 1.5;
+
+    if (!reco.IsStop())
+        return false;
+
+    const double startx = reco.GetStartX();
+    const double starty = reco.GetStartY();
+    const double startz = reco.GetStartZ();
+
+    const double stopx = reco.GetStopX();
+    const double stopy = reco.GetStopY();
+    const double stopz = reco.GetStopZ();
+
+    const double diffx = stopx - startx;
+    const double diffy = stopy - starty;
+    const double diffz = stopz - startz;
+
+    const double L = std::sqrt(diffx*diffx + diffy*diffy + diffz*diffz);
+
+    if (L <= 0.0)
+        return false;
+
+    const double dirx = diffx / L;
+    const double diry = diffy / L;
+    const double dirz = diffz / L;
+
+    const double startz_c = startz - tank_z_center;
+
+    const double a = dirx*dirx + dirz*dirz;
+    const double b = -2.0*dirx*startx - 2.0*dirz*startz_c;
+
+    if (a == 0.0)
+        return false;
+
     // -------------------------------------------------------------------------------
-    // Cylinder-line intersection for tank volume
-    //
-    // Same calculation as pmtVolume exit, but with radius = outerCylRadius.
-    //
-    // This gives another intersection point on the tank volume cylinder.
-    // Distance between PMT-volume intersection and tank intersection is used
-    // in the simple energy reconstruction.
+    // Inner PMT-volume intersection
     // -------------------------------------------------------------------------------
 
-    const double cp =
-        startx*startx + startz_c*startz_c - outerCylRadius*outerCylRadius;
+    const double c_inner = startx*startx + startz_c*startz_c -
+                            innerCylRadius*innerCylRadius;
 
-    const double discp = b*b - 4.0*a*cp;
+    const double disc_inner = b*b - 4.0*a*c_inner;
 
-    double dist_pmtvol_tank = 0.0;
+    if (disc_inner < 0.0)
+        return false;
 
-    if (discp >= 0.0) {
+    const double sqrt_disc_inner = std::sqrt(disc_inner);
 
-        const double sqrt_discp = std::sqrt(discp);
+    const double t1_inner = (-b + sqrt_disc_inner) / (2.0*a);
+    const double t2_inner = (-b - sqrt_disc_inner) / (2.0*a);
 
-        const double t1p = (-b + sqrt_discp) / (2.0*a);
-        const double t2p = (-b - sqrt_discp) / (2.0*a);
+    double t_inner = -9999;
 
-        double tp = -9999;
+    if (t1_inner >= 0.0 && t2_inner >= 0.0)
+        t_inner = (t1_inner < t2_inner) ? t1_inner : t2_inner;
+    else if (t1_inner >= 0.0)
+        t_inner = t1_inner;
+    else if (t2_inner >= 0.0)
+        t_inner = t2_inner;
+    else
+        return false;
 
-        if (t1p >= 0.0 && t2p >= 0.0)
-            tp = (t1p < t2p) ? t1p : t2p;
-        else if (t1p >= 0.0)
-            tp = t1p;
-        else if (t2p >= 0.0)
-            tp = t2p;
+    const double inner_x = startx - t_inner * dirx;
+    const double inner_y = starty - t_inner * diry;
+    const double inner_z = startz - t_inner * dirz;
 
-        if (tp >= 0.0) {
+    // -------------------------------------------------------------------------------
+    // Outer tank intersection
+    // -------------------------------------------------------------------------------
 
-            const double exitxp = startx - tp*out.dirx;
-            const double exityp = starty - tp*out.diry;
-            const double exitzp = startz - tp*out.dirz;
+    const double c_outer = startx*startx + startz_c*startz_c -
+                           outerCylRadius*outerCylRadius;
 
-            dist_pmtvol_tank = std::sqrt(
-                (exitxp - out.exitx)*(exitxp - out.exitx) +
-                (exityp - out.exity)*(exityp - out.exity) +
-                (exitzp - out.exitz)*(exitzp - out.exitz)
-            );
-        }
+    const double disc_outer = b*b - 4.0*a*c_outer;
+
+    if (disc_outer < 0.0)
+        return false;
+
+    const double sqrt_disc_outer = std::sqrt(disc_outer);
+
+    const double t1_outer = (-b + sqrt_disc_outer) / (2.0*a);
+    const double t2_outer = (-b - sqrt_disc_outer) / (2.0*a);
+
+    double t_outer = -9999;
+
+    if (t1_outer >= 0.0 && t2_outer >= 0.0)
+        t_outer = (t1_outer < t2_outer) ? t1_outer : t2_outer;
+    else if (t1_outer >= 0.0)
+        t_outer = t1_outer;
+    else if (t2_outer >= 0.0)
+        t_outer = t2_outer;
+    else
+        return false;
+
+    const double outer_x = startx - t_outer * dirx;
+    const double outer_y = starty - t_outer * diry;
+    const double outer_z = startz - t_outer * dirz;
+
+    dist_pmtvol_tank =
+        std::sqrt(
+            (outer_x - inner_x)*(outer_x - inner_x) +
+            (outer_y - inner_y)*(outer_y - inner_y) +
+            (outer_z - inner_z)*(outer_z - inner_z)
+        );
+
+    return true;
+}
+
+ // -------------------------------------------------------------------------------
+ 
+EnergyCalibration FitTankEnergyCalibration(
+    TTree* inputTree,
+    MRDRecoReader& mrdRecoReader,
+    TankClusterReader& tankClusterReader,
+    MCANNIEEventReader& mcReader
+)
+{
+    EnergyCalibration calib;
+
+    if (!inputTree) {
+        std::cerr << "Error: inputTree is null in FitTankEnergyCalibration."
+                  << std::endl;
+        return calib;
     }
 
-    // -------------------------------------------------------------------------------
-    // Simple energy reconstruction
-    //
-    // E = offset
-    //   + air/path energy correction
-    //   + MRD energy loss
-    //   + PMT charge term
-    // -------------------------------------------------------------------------------
+    const double tank_water_eloss_per_m = 199.2; // MeV/m
 
-    const double mrd_eloss = reco.GetEnergyLoss();
+    std::vector<double> totalPE_values;
+    std::vector<double> Etank_values;
 
+    Long64_t nEntries = inputTree->GetEntries();
 
-    out.E =
-        energy_offset +
-        tank_water_eloss_per_m * dist_pmtvol_tank +
-        mrd_eloss +
-        pe_to_energy * totalPE;
-  
-  
-  
-  
-/*    
-//daha sonra bunu yap    
-const double tank_eloss =
-    tank_water_eloss_per_m * trackLengthTank;
+    Long64_t nSkippedReco = 0;
+    Long64_t nSkippedPE = 0;
+    Long64_t nSkippedGeom = 0;
+    Long64_t nSkippedEnergy = 0;
 
-const double outer_water_eloss =
-    tank_water_eloss_per_m * dist_pmtvol_tank;
+    for (Long64_t i = 0; i < nEntries; ++i) {
 
-out.E =
-    energy_offset +
-    tank_eloss +
-    outer_water_eloss +
-    mrd_eloss;        
-*/
+        inputTree->GetEntry(i);
 
+        EMRDRecos eMRDRecos;
+        mrdRecoReader.ReadEntry(i, eMRDRecos);
 
+        const auto& recos = eMRDRecos.Get();
 
-    out.success = true;
+        if (recos.size() != 1) {
+            ++nSkippedReco;
+            continue;
+        }
 
-    return out;
+        const auto& reco = recos.at(0);
+
+        if (!reco.IsStop()) {
+            ++nSkippedReco;
+            continue;
+        }
+
+        double totalPE =
+            ANNIEUtility::GetTotalPE(
+                tankClusterReader,
+                i,
+                0.0,
+                2000.0
+            );
+
+        if (totalPE <= 30.0) {
+            ++nSkippedPE;
+            continue;
+        }
+
+        double dist_pmtvol_tank = -9999;
+
+        bool ok =
+            ComputeOuterDistanceFromMRD(
+                reco,
+                dist_pmtvol_tank
+            );
+
+        if (!ok) {
+            ++nSkippedGeom;
+            continue;
+        }
+
+        double Etrue    = mcReader.GetTrueMuonEnergy();
+        double E_outer  = tank_water_eloss_per_m * dist_pmtvol_tank;
+        double E_mrd    = reco.GetEnergyLoss();
+        double E_tank   = Etrue - E_outer - E_mrd;
+
+        if (!std::isfinite(E_tank) || E_tank <= 0.0) {
+            ++nSkippedEnergy;
+            continue;
+        }
+
+        totalPE_values.push_back(totalPE);
+        Etank_values.push_back(E_tank);
+    }
+
+    calib.nUsed = totalPE_values.size();
+
+    if (calib.nUsed < 2) {
+        std::cerr << "Error: not enough events for tank energy calibration."
+                  << std::endl;
+        std::cerr << "Used events: " << calib.nUsed << std::endl;
+        return calib;
+    }
+
+    TGraph graph(calib.nUsed);
+
+    for (Long64_t i = 0; i < calib.nUsed; ++i) {
+        graph.SetPoint(
+            i,
+            totalPE_values[i],
+            Etank_values[i]
+        );
+    }
+
+    TF1 fitFunc(
+        "fitFunc",
+        "[0] + [1]*x",
+        0.0,
+        *std::max_element(totalPE_values.begin(), totalPE_values.end())
+    );
+
+    fitFunc.SetParName(0, "p0");
+    fitFunc.SetParName(1, "p1");
+
+    graph.Fit(&fitFunc, "Q");
+
+    calib.p0 = fitFunc.GetParameter(0);
+    calib.p1  = fitFunc.GetParameter(1);
+    calib.valid = true;
+
+    std::cout << "----------------------------------" << std::endl;
+    std::cout << "Tank energy calibration" << std::endl;
+    std::cout << "Model: ETank = p0 + p1 * totalPE" << std::endl;
+    std::cout << "Used events       : " << calib.nUsed << std::endl;
+    std::cout << "Skipped reco      : " << nSkippedReco << std::endl;
+    std::cout << "Skipped PE        : " << nSkippedPE << std::endl;
+    std::cout << "Skipped geometry  : " << nSkippedGeom << std::endl;
+    std::cout << "Skipped energy    : " << nSkippedEnergy << std::endl;
+    std::cout << "p0                : " << calib.p0 << " MeV" << std::endl;
+    std::cout << "p1                : " << calib.p1 << " MeV/PE" << std::endl;
+    std::cout << "----------------------------------" << std::endl;
+
+    return calib;
 }
